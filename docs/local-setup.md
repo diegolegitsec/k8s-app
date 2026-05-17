@@ -1,67 +1,28 @@
-# Local Setup — Docker Desktop Kubernetes
+# Option 1 — Vanilla (Local, Docker Desktop)
+
+Builds images locally and deploys to Docker Desktop's built-in Kubernetes cluster. No registry or cloud account required.
 
 ## Prerequisites
 
 - Docker Desktop for Mac with Kubernetes enabled
   - Open Docker Desktop → Settings → Kubernetes → Enable Kubernetes → Apply & Restart
-- `kubectl` (comes with Docker Desktop)
+- `kubectl` (bundled with Docker Desktop)
 
-## 1. Build Docker Images
-
-Run from the repo root. The `imagePullPolicy: Never` in the manifests means K8s uses these local images directly — no registry needed.
+## Deploy
 
 ```bash
-docker build -t k8s-app/backend:latest ./backend
-docker build -t k8s-app/frontend:latest ./frontend
+./scripts/deploy.sh vanilla
 ```
 
-## 2. Deploy
+The script:
+1. Builds `k8s-app/backend:latest` and `k8s-app/frontend:latest` locally
+2. Applies all manifests in `k8s/local/`
+3. Waits for deployments to roll out
+4. Prints the app URL
 
-```bash
-# Namespace first
-kubectl apply -f k8s/local/namespace.yaml
+App available at **http://localhost**.
 
-# Redis (PV must be created before PVC)
-kubectl apply -f k8s/local/redis/pv.yaml
-kubectl apply -f k8s/local/redis/pvc.yaml
-kubectl apply -f k8s/local/redis/deployment.yaml
-kubectl apply -f k8s/local/redis/service.yaml
-
-# Backend
-kubectl apply -f k8s/local/backend/configmap.yaml
-kubectl apply -f k8s/local/backend/deployment.yaml
-kubectl apply -f k8s/local/backend/service.yaml
-
-# Frontend
-kubectl apply -f k8s/local/frontend/deployment.yaml
-kubectl apply -f k8s/local/frontend/service.yaml
-```
-
-Or apply whole directories at once (order matters for Redis PV/PVC):
-
-```bash
-kubectl apply -f k8s/local/namespace.yaml
-kubectl apply -f k8s/local/redis/
-kubectl apply -f k8s/local/backend/
-kubectl apply -f k8s/local/frontend/
-```
-
-## 3. Wait for Rollout
-
-```bash
-kubectl rollout status deployment/redis   -n k8s-app
-kubectl rollout status deployment/backend -n k8s-app
-kubectl rollout status deployment/frontend -n k8s-app
-```
-
-## 4. Access the App
-
-Docker Desktop automatically assigns `localhost` as the EXTERNAL-IP for LoadBalancer services.
-
-- **UI:** http://localhost
-- **API:** http://localhost/api/entries
-
-## 5. Verify
+## Verify
 
 ```bash
 # Health check
@@ -77,43 +38,55 @@ curl http://localhost/api/entries
 
 # Toggle logging
 curl -X POST http://localhost/api/logging/toggle
-
-# Check logging state
-curl http://localhost/api/logging/status
-```
-
-## 6. Tear Down
-
-```bash
-kubectl delete namespace k8s-app
-kubectl delete pv redis-pv
 ```
 
 ## Rebuild After Code Changes
 
 ```bash
+./scripts/deploy.sh vanilla
+```
+
+Re-running the script rebuilds both images and does a rolling restart.
+
+To restart a single service after a rebuild:
+```bash
 docker build -t k8s-app/backend:latest ./backend
 kubectl rollout restart deployment/backend -n k8s-app
+```
 
-docker build -t k8s-app/frontend:latest ./frontend
-kubectl rollout restart deployment/frontend -n k8s-app
+## Tear Down
+
+```bash
+./scripts/deploy.sh teardown
+```
+
+## Manual Apply (without the script)
+
+If you prefer to apply manifests directly:
+
+```bash
+kubectl apply -f k8s/local/namespace.yaml
+kubectl apply -f k8s/local/redis/
+kubectl apply -f k8s/local/backend/
+kubectl apply -f k8s/local/frontend/
 ```
 
 ## Troubleshooting
 
-**Pods stuck in `ErrImagePull` or `ImagePullBackOff`**
-Make sure `imagePullPolicy: Never` is set in the deployment YAML and the image tag matches exactly what you built (`k8s-app/backend:latest`).
+**Pods stuck in `ErrImagePull`**
+The `imagePullPolicy: Never` in local manifests requires the image to exist locally.
+Make sure you ran `docker build` before applying, or use `./scripts/deploy.sh vanilla` which handles both steps.
 
-**Backend pods in `CrashLoopBackOff`**
-Redis may not be ready yet. Check Redis pod status:
+**Backend in `CrashLoopBackOff`**
+Redis may still be starting. Check pod status:
 ```bash
 kubectl get pods -n k8s-app
 kubectl logs -n k8s-app deployment/backend
 ```
-The backend reconnects automatically once Redis is available.
+The backend reconnects automatically once Redis is ready.
 
 **`localhost` not responding**
 ```bash
 kubectl get svc frontend-service -n k8s-app
 ```
-The EXTERNAL-IP should show `localhost`. If it shows `<pending>`, Kubernetes is still assigning it — wait a moment.
+EXTERNAL-IP should be `localhost`. If it shows `<pending>`, wait a moment — Docker Desktop takes a few seconds to assign it.

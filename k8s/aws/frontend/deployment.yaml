@@ -15,8 +15,8 @@ spec:
     spec:
       containers:
         - name: frontend
-          # Replace <AWS_ACCOUNT_ID> and <REGION> before deploying
-          image: <AWS_ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/k8s-app/frontend:latest
+          # Substituted by deploy.sh from config.env (GITHUB_OWNER, IMAGE_TAG).
+          image: ghcr.io/<OWNER>/k8s-app/frontend:<TAG>
           imagePullPolicy: Always
           ports:
             - containerPort: 80

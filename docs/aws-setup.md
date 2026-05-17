@@ -1,135 +1,111 @@
-# AWS Setup — EKS
+# Option 3 — AWS (EKS)
+
+Deploys to an EKS cluster using GHCR images built by CI. Redis is backed by an EBS gp3 volume provisioned dynamically.
+
+> **Do [ci-setup.md](ci-setup.md) first.** The deploy script pulls images from GHCR — they must exist before you deploy.
 
 ## Prerequisites
 
 - AWS CLI configured (`aws configure`)
 - `eksctl` installed: https://eksctl.io/installation/
 - `kubectl` installed
-- `docker` installed
+- GHCR images pushed at least once (push to `main` to trigger CI)
 
-## 1. Create EKS Cluster
+## 1. Configure
 
 ```bash
+cp config.env.example config.env
+```
+
+Edit `config.env`:
+
+```env
+GITHUB_OWNER=diegolegitsec   # your GitHub username
+IMAGE_TAG=latest              # or a specific Git SHA
+AWS_REGION=us-east-1
+EKS_CLUSTER_NAME=k8s-app
+NODE_TYPE=t3.medium
+NODE_COUNT=2
+NODE_MIN=1
+NODE_MAX=3
+```
+
+`config.env` is gitignored — it will never be committed.
+
+## 2. Create EKS Cluster
+
+Run once. Takes ~15 minutes.
+
+```bash
+source config.env
+
 eksctl create cluster \
-  --name k8s-app \
-  --region us-east-1 \
+  --name "$EKS_CLUSTER_NAME" \
+  --region "$AWS_REGION" \
   --nodegroup-name workers \
-  --node-type t3.medium \
-  --nodes 2 \
-  --nodes-min 1 \
-  --nodes-max 3 \
+  --node-type "$NODE_TYPE" \
+  --nodes "$NODE_COUNT" \
+  --nodes-min "$NODE_MIN" \
+  --nodes-max "$NODE_MAX" \
   --managed
 ```
 
-This takes ~15 minutes. It also updates your kubeconfig automatically.
+`eksctl` updates your kubeconfig automatically.
 
-## 2. Install EBS CSI Driver
+## 3. Install EBS CSI Driver
 
-Required for dynamic EBS volume provisioning (Redis persistent storage).
+Required for dynamic EBS volume provisioning (Redis persistent storage). Run once per cluster.
 
 ```bash
-# Create the IAM role for the EBS CSI driver
+source config.env
+
 eksctl create iamserviceaccount \
   --name ebs-csi-controller-sa \
   --namespace kube-system \
-  --cluster k8s-app \
+  --cluster "$EKS_CLUSTER_NAME" \
   --role-name AmazonEKS_EBS_CSI_DriverRole \
   --role-only \
   --attach-policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy \
   --approve
 
-# Get the role ARN
-ROLE_ARN=$(aws iam get-role --role-name AmazonEKS_EBS_CSI_DriverRole \
+ROLE_ARN=$(aws iam get-role \
+  --role-name AmazonEKS_EBS_CSI_DriverRole \
   --query 'Role.Arn' --output text)
 
-# Install the addon
 eksctl create addon \
   --name aws-ebs-csi-driver \
-  --cluster k8s-app \
-  --service-account-role-arn $ROLE_ARN \
+  --cluster "$EKS_CLUSTER_NAME" \
+  --service-account-role-arn "$ROLE_ARN" \
   --force
 ```
 
-## 3. Create ECR Repositories
+## 4. Make GHCR Packages Public (or configure a pull secret)
+
+By default GHCR packages are private. The easiest option is to make them public:
+
+1. Go to `https://github.com/diegolegitsec?tab=packages`
+2. Open each package → **Package settings** → **Change visibility** → Public
+
+If you want to keep them private, create an imagePullSecret instead — see [ci-setup.md → Using private packages](ci-setup.md#using-private-packages).
+
+## 5. Deploy
 
 ```bash
-ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-REGION=us-east-1
-
-aws ecr create-repository --repository-name k8s-app/backend  --region $REGION
-aws ecr create-repository --repository-name k8s-app/frontend --region $REGION
+./scripts/deploy.sh aws
 ```
 
-## 4. Build and Push Images to ECR
+The script reads `config.env`, updates your kubeconfig, substitutes `GITHUB_OWNER` and `IMAGE_TAG` into the AWS manifests, and applies them. It then waits for rollout and prints the NLB URL.
+
+## 6. Get the App URL
 
 ```bash
-ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-REGION=us-east-1
-ECR=$ACCOUNT.dkr.ecr.$REGION.amazonaws.com
-
-# Authenticate
-aws ecr get-login-password --region $REGION | \
-  docker login --username AWS --password-stdin $ECR
-
-# Build and push backend
-docker build -t $ECR/k8s-app/backend:latest ./backend
-docker push $ECR/k8s-app/backend:latest
-
-# Build and push frontend
-docker build -t $ECR/k8s-app/frontend:latest ./frontend
-docker push $ECR/k8s-app/frontend:latest
-```
-
-## 5. Update Image References in AWS Manifests
-
-Replace the placeholder values in the AWS deployment files:
-
-```bash
-ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-REGION=us-east-1
-
-sed -i '' \
-  "s|<AWS_ACCOUNT_ID>|$ACCOUNT|g; s|<REGION>|$REGION|g" \
-  k8s/aws/backend/deployment.yaml \
-  k8s/aws/frontend/deployment.yaml
-```
-
-## 6. Deploy
-
-```bash
-# StorageClass and Namespace
-kubectl apply -f k8s/aws/storageclass.yaml
-kubectl apply -f k8s/local/namespace.yaml   # namespace is environment-agnostic
-
-# Redis
-kubectl apply -f k8s/aws/redis/pvc.yaml
-kubectl apply -f k8s/aws/redis/deployment.yaml
-kubectl apply -f k8s/aws/redis/service.yaml
-
-# Backend
-kubectl apply -f k8s/aws/backend/configmap.yaml
-kubectl apply -f k8s/aws/backend/deployment.yaml
-kubectl apply -f k8s/aws/backend/service.yaml
-
-# Frontend
-kubectl apply -f k8s/aws/frontend/deployment.yaml
-kubectl apply -f k8s/aws/frontend/service.yaml
-```
-
-## 7. Get the App URL
-
-```bash
-kubectl rollout status deployment/frontend -n k8s-app
-
 kubectl get svc frontend-service -n k8s-app
-# EXTERNAL-IP column shows the NLB DNS name (may take 1-2 min to provision)
+# EXTERNAL-IP shows the NLB DNS — may take 1-2 min to become active
 ```
 
-Access the app at `http://<NLB-DNS>`.
-
-## 8. Verify
-
+Or run a verify check:
 ```bash
+source config.env
 NLB=$(kubectl get svc frontend-service -n k8s-app \
   -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 
@@ -137,24 +113,34 @@ curl http://$NLB/api/health
 curl http://$NLB/api/entries
 ```
 
-## 9. Tear Down
+## 7. Redeploy After a New CI Build
+
+After CI pushes a new image to GHCR, force a rolling restart to pull `latest`:
 
 ```bash
-# Delete K8s resources (this also releases the EBS volume if reclaimPolicy is Delete)
-kubectl delete namespace k8s-app
-kubectl delete storageclass ebs-gp3
-
-# Delete EKS cluster
-eksctl delete cluster --name k8s-app --region us-east-1
-
-# Delete ECR repositories (optional)
-aws ecr delete-repository --repository-name k8s-app/backend  --force --region us-east-1
-aws ecr delete-repository --repository-name k8s-app/frontend --force --region us-east-1
+kubectl rollout restart deployment/backend  -n k8s-app
+kubectl rollout restart deployment/frontend -n k8s-app
 ```
+
+To deploy a specific build, update `IMAGE_TAG` in `config.env` to the Git SHA and re-run:
+```bash
+./scripts/deploy.sh aws
+```
+
+## 8. Tear Down
+
+```bash
+./scripts/deploy.sh teardown
+
+# Delete the EKS cluster
+source config.env
+eksctl delete cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
+```
+
+> The `reclaimPolicy: Retain` on the EBS StorageClass means volumes are NOT deleted when the PVC is removed. Delete them manually in the EC2 console (`Volumes` section) if no longer needed.
 
 ## Notes
 
-- **Redis replicas must stay at 1.** EBS `ReadWriteOnce` only allows a single Pod to mount the volume.
-- **EBS volumes are AZ-scoped.** If the Redis Pod is rescheduled to a node in a different AZ, it will fail to mount. For production, pin Redis to a specific AZ using node affinity.
-- **NLB provisioning takes 1-2 minutes** after applying the frontend Service. The DNS name is immediately visible but may not resolve until the NLB is active.
-- The `reclaimPolicy: Retain` on the StorageClass means EBS volumes are NOT deleted when the PVC is deleted. Delete them manually in the EC2 console if not needed.
+- **Redis replicas must stay at 1.** EBS `ReadWriteOnce` allows only one Pod to mount the volume at a time.
+- **EBS volumes are AZ-scoped.** If the Redis Pod reschedules to a different AZ, the mount will fail. For production, add a node affinity to pin Redis to a fixed AZ.
+- **NLB provisioning takes 1-2 minutes** after the Service is created. The hostname is visible immediately but DNS may not resolve until the NLB is active.
