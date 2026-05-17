@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: redis-pv
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    # Lives inside Docker Desktop's Linux VM, not the Mac filesystem.
+    # Data survives pod restarts but not Docker Desktop VM restarts.
+    path: /tmp/redis-data
+  persistentVolumeReclaimPolicy: Retain
