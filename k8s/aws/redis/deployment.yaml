@@ -16,13 +16,39 @@ spec:
       containers:
         - name: redis
           image: redis:7-alpine
-          args: ["--save", "60", "1", "--appendonly", "no"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - redis-server --requirepass "$REDIS_PASSWORD" --save 60 1 --appendonly yes --appendfsync everysec
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: password
           ports:
             - containerPort: 6379
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "128Mi"
           volumeMounts:
             - name: redis-data
               mountPath: /data
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: redis-data
           persistentVolumeClaim:
             claimName: redis-pvc
+        - name: tmp
+          emptyDir: {}

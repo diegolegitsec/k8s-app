@@ -11,14 +11,8 @@ CONFIG="$ROOT/config.env"
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-log()  { echo "▶  $*"; }
-err()  { echo "✖  $*" >&2; exit 1; }
-
-require_config() {
-    [[ -f "$CONFIG" ]] || err "config.env not found. Copy config.env.example → config.env and fill in your values."
-    # shellcheck source=/dev/null
-    source "$CONFIG"
-}
+log() { echo "▶  $*"; }
+err() { echo "✖  $*" >&2; exit 1; }
 
 require_cmd() {
     command -v "$1" &>/dev/null || err "'$1' is required but not installed."
@@ -28,12 +22,34 @@ require_var() {
     [[ -n "${!1:-}" ]] || err "$1 is not set in config.env."
 }
 
+# Safely parse config.env without executing it as shell code.
+load_config() {
+    [[ -f "$CONFIG" ]] || err "config.env not found. Copy config.env.example → config.env and fill in your values."
+    while IFS='=' read -r key val; do
+        # Skip blank lines and comments
+        [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+        # Only accept valid env var names (uppercase letters, digits, underscore)
+        [[ "$key" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
+        # Strip inline comments, then surrounding whitespace
+        val="${val%%#*}"
+        val="${val#"${val%%[![:space:]]*}"}"
+        val="${val%"${val##*[![:space:]]}"}"
+        # Strip surrounding single or double quotes
+        val="${val#\'}" ; val="${val%\'}"
+        val="${val#\"}" ; val="${val%\"}"
+        export "$key=$val"
+    done < "$CONFIG"
+}
+
+# Substitute <OWNER>, <TAG>, <REDIS_PASSWORD>, and <ALLOWED_ORIGIN>
+# in a manifest and pipe the result to kubectl apply.
 apply_aws_manifest() {
-    # Substitutes <OWNER> and <TAG> in a manifest and pipes it to kubectl apply.
     local file="$1"
     sed \
         -e "s|<OWNER>|${GITHUB_OWNER}|g" \
         -e "s|<TAG>|${IMAGE_TAG:-latest}|g" \
+        -e "s|<REDIS_PASSWORD>|${REDIS_PASSWORD}|g" \
+        -e "s|<ALLOWED_ORIGIN>|${ALLOWED_ORIGIN:-http://localhost}|g" \
         "$file" | kubectl apply -f -
 }
 
@@ -51,9 +67,17 @@ deploy_vanilla() {
 
     log "Applying manifests..."
     kubectl apply -f "$ROOT/k8s/local/namespace.yaml"
-    kubectl apply -f "$ROOT/k8s/local/redis/"
-    kubectl apply -f "$ROOT/k8s/local/backend/"
-    kubectl apply -f "$ROOT/k8s/local/frontend/"
+    kubectl apply -f "$ROOT/k8s/local/redis/pv.yaml"
+    kubectl apply -f "$ROOT/k8s/local/redis/pvc.yaml"
+    kubectl apply -f "$ROOT/k8s/local/redis/secret.yaml"
+    kubectl apply -f "$ROOT/k8s/local/redis/deployment.yaml"
+    kubectl apply -f "$ROOT/k8s/local/redis/service.yaml"
+    kubectl apply -f "$ROOT/k8s/local/backend/configmap.yaml"
+    kubectl apply -f "$ROOT/k8s/local/backend/deployment.yaml"
+    kubectl apply -f "$ROOT/k8s/local/backend/service.yaml"
+    kubectl apply -f "$ROOT/k8s/local/frontend/deployment.yaml"
+    kubectl apply -f "$ROOT/k8s/local/frontend/service.yaml"
+    kubectl apply -f "$ROOT/k8s/local/network-policies.yaml"
 
     log "Waiting for rollout..."
     kubectl rollout status deployment/redis    -n k8s-app
@@ -68,13 +92,15 @@ deploy_vanilla() {
 # ── aws ───────────────────────────────────────────────────────────────────────
 
 deploy_aws() {
-    require_config
+    load_config
     require_cmd kubectl
     require_var GITHUB_OWNER
     require_var AWS_REGION
     require_var EKS_CLUSTER_NAME
+    require_var REDIS_PASSWORD
 
     IMAGE_TAG="${IMAGE_TAG:-latest}"
+    ALLOWED_ORIGIN="${ALLOWED_ORIGIN:-http://localhost}"
 
     log "Updating kubeconfig for EKS cluster '$EKS_CLUSTER_NAME' in $AWS_REGION..."
     aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
@@ -83,13 +109,17 @@ deploy_aws() {
     kubectl apply -f "$ROOT/k8s/aws/storageclass.yaml"
     kubectl apply -f "$ROOT/k8s/local/namespace.yaml"
 
+    log "Applying NetworkPolicies..."
+    kubectl apply -f "$ROOT/k8s/aws/network-policies.yaml"
+
     log "Applying Redis..."
     kubectl apply -f "$ROOT/k8s/aws/redis/pvc.yaml"
+    apply_aws_manifest "$ROOT/k8s/aws/redis/secret.yaml"
     kubectl apply -f "$ROOT/k8s/aws/redis/deployment.yaml"
     kubectl apply -f "$ROOT/k8s/aws/redis/service.yaml"
 
     log "Applying backend..."
-    kubectl apply -f "$ROOT/k8s/aws/backend/configmap.yaml"
+    apply_aws_manifest "$ROOT/k8s/aws/backend/configmap.yaml"
     apply_aws_manifest "$ROOT/k8s/aws/backend/deployment.yaml"
     kubectl apply -f "$ROOT/k8s/aws/backend/service.yaml"
 
@@ -108,7 +138,12 @@ deploy_aws() {
     echo ""
     echo "✔  Deployment complete."
     echo "   Frontend: http://$NLB"
-    echo "   (NLB may take 1-2 min to become active if shown as <pending>)"
+    if [[ "$NLB" == "<pending>" ]]; then
+        echo "   (NLB may take 1-2 min to become active)"
+    else
+        echo ""
+        echo "   Next: update ALLOWED_ORIGIN=http://$NLB in config.env and redeploy to lock down CORS."
+    fi
 }
 
 # ── teardown ──────────────────────────────────────────────────────────────────

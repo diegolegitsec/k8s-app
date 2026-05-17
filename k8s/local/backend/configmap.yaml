@@ -7,3 +7,4 @@ data:
   REDIS_URL: "redis://redis-service:6379"
   PORT: "3000"
   NODE_ENV: "production"
+  ALLOWED_ORIGIN: "http://localhost"

@@ -1,13 +1,25 @@
 import express from 'express'
 import cors from 'cors'
+import rateLimit from 'express-rate-limit'
 import redis from './lib/redis.js'
 import entriesRouter from './routes/entries.js'
 import loggingRouter from './routes/logging.js'
 
 const app = express()
 
-app.use(cors())
-app.use(express.json())
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGIN || 'http://localhost'
+}))
+
+app.use(express.json({ limit: '10kb' }))
+
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.path === '/api/health'
+}))
 
 app.use(async (req, res, next) => {
   const val = await redis.get('config:logging')
