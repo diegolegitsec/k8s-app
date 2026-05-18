@@ -34,6 +34,7 @@ jobs:
         with:
           context: ./backend
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/${{ github.repository_owner }}/k8s-app/backend:latest
             ghcr.io/${{ github.repository_owner }}/k8s-app/backend:${{ github.sha }}
@@ -45,6 +46,7 @@ jobs:
         with:
           context: ./frontend
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/${{ github.repository_owner }}/k8s-app/frontend:latest
             ghcr.io/${{ github.repository_owner }}/k8s-app/frontend:${{ github.sha }}
