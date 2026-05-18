@@ -13,8 +13,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NS=k8s-app
 
-BACKEND_IMAGE=ghcr.io/diegolegitsec/k8s-app/backend:latest
-FRONTEND_IMAGE=ghcr.io/diegolegitsec/k8s-app/frontend:latest
+BACKEND_IMAGE=ghcr.io/diego4sec/k8s-app/backend:latest
+FRONTEND_IMAGE=ghcr.io/diego4sec/k8s-app/frontend:latest
 
 log() { echo "▶  $*"; }
 

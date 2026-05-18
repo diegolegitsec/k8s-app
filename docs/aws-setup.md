@@ -20,7 +20,7 @@ cp config.env.example config.env
 Edit `config.env`:
 
 ```env
-GITHUB_OWNER=diegolegitsec   # your GitHub username
+GITHUB_OWNER=diego4sec   # your GitHub username
 IMAGE_TAG=latest              # or a specific Git SHA
 AWS_REGION=us-east-1
 EKS_CLUSTER_NAME=k8s-app
@@ -83,7 +83,7 @@ eksctl create addon \
 
 By default GHCR packages are private. The easiest option is to make them public:
 
-1. Go to `https://github.com/diegolegitsec?tab=packages`
+1. Go to `https://github.com/diego4sec?tab=packages`
 2. Open each package → **Package settings** → **Change visibility** → Public
 
 If you want to keep them private, create an imagePullSecret instead — see [ci-setup.md → Using private packages](ci-setup.md#using-private-packages).
